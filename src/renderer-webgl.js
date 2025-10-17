@@ -182,21 +182,17 @@ function loadKTX2FromBuffer(buffer, callback) {
     });
 }
 
-// Create cube geometry and material (texture will be applied when loaded)
-const geometry = new THREE.BoxGeometry(2, 2, 2);
-
-
-
-const material = new THREE.MeshBasicMaterial({ color: 0xffffff }); // Default white color until texture loads
-const cube = new THREE.Mesh(geometry, material);
-scene.add(cube);
+// Cube will be created when texture is loaded
+let cube = null;
 
 // Animation loop
 function animate() {
     requestAnimationFrame(animate);
-    // Rotate the cube
-    cube.rotation.x += 0.01;
-    cube.rotation.y += 0.01;
+    // Rotate the cube (if it exists)
+    if (cube) {
+        cube.rotation.x += 0.01;
+        cube.rotation.y += 0.01;
+    }
 
     // If an array material is active, advance layer once per second
     updateArrayLayerCycling();
@@ -218,8 +214,6 @@ window.addEventListener('resize', () => {
 
 export { animate, loadKTX2FromBuffer };
 export { loadKTX2ArrayFromBuffer };
-export { loadKTX2ArrayFromSlices };
-export { loadKTX2ArrayFromUrl };
 
 // ================= Array texture demo support =================
 
@@ -231,7 +225,10 @@ let arrayLastSwitchTime = 0;
 // Create a shader material that samples from a sampler2DArray
 // NOTE: sampler2DArray is a GLSL (OpenGL Shading Language) type 
 // that represents a 2D texture array.
-function makeArrayMaterial(arrayTex, layers) {
+function makeArrayMaterial(arrayTex) {
+    // Infer layer count from the texture's image depth property
+    const layers = arrayTex.image?.depth || 1;
+
     arrayLayerCount = layers;
     arrayLayer = 0;
     arrayLastSwitchTime = performance.now();
@@ -263,12 +260,13 @@ function makeArrayMaterial(arrayTex, layers) {
     });
     mat.transparent = false;
     mat.depthWrite = true;
+    console.log('[WebGL] Array material created with', layers, 'layers');
     setLayerLabel(`Layer 0 / ${layers}`);
     return mat;
 }
 
 // Load a KTX2 array texture from bytes and apply shader cycling material
-function loadKTX2ArrayFromBuffer(buffer, layers) {
+function loadKTX2ArrayFromBuffer(buffer) {
     showLoadingSpinner();
     const blob = new Blob([buffer], { type: 'application/octet-stream' });
     const url = URL.createObjectURL(blob);
@@ -295,240 +293,23 @@ function loadKTX2ArrayFromBuffer(buffer, layers) {
         // Diagnostics: log chosen GPU format
         console.log('[KTX2 array single-file] GPU-format:', formatToString(texture.format), `(${texture.format})`, 'mips=', texture.mipmaps?.length ?? 'unknown');
 
-        arrayMaterial = makeArrayMaterial(texture, layers);
-        cube.material = arrayMaterial;
-        cube.material.needsUpdate = true;
+        arrayMaterial = makeArrayMaterial(texture);
+
+        // Create and add cube with the loaded texture
+        if (!cube) {
+            const geometry = new THREE.BoxGeometry(2, 2, 2);
+            cube = new THREE.Mesh(geometry, arrayMaterial);
+            scene.add(cube);
+        } else {
+            cube.material = arrayMaterial;
+            cube.material.needsUpdate = true;
+        }
 
         hideLoadingSpinner();
     }, undefined, (error) => {
         hideLoadingSpinner();
         console.error('Error loading KTX2 array texture:', error);
     });
-}
-
-// Load a KTX2 array texture directly from a URL and apply shader cycling material
-function loadKTX2ArrayFromUrl(url) {
-    showLoadingSpinner();
-    ktx2Loader.load(url, (texture) => {
-        // KTX2Loader will create a DataTexture2DArray when the source is an array
-        texture.flipY = false;
-        texture.generateMipmaps = false;
-        const hasMips = Array.isArray(texture.mipmaps) ? texture.mipmaps.length > 1 : true;
-        texture.minFilter = hasMips ? THREE.LinearMipmapLinearFilter : THREE.LinearFilter;
-        texture.magFilter = THREE.LinearFilter;
-        texture.wrapS = THREE.ClampToEdgeWrapping;
-        texture.wrapT = THREE.ClampToEdgeWrapping;
-        try {
-            if (!isAndroid()) {
-                texture.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
-            }
-        } catch { }
-
-        // Determine depth (layers) from texture.image if available
-        const depth = texture?.image?.depth || 1;
-        console.log('[KTX2 array url] GPU-format:', formatToString(texture.format), `(${texture.format})`, 'layers=', depth, 'mips=', texture.mipmaps?.length ?? 'unknown');
-
-        arrayMaterial = makeArrayMaterial(texture, depth);
-        cube.material = arrayMaterial;
-        cube.material.needsUpdate = true;
-
-        hideLoadingSpinner();
-    }, undefined, (error) => {
-        hideLoadingSpinner();
-        console.error('Error loading KTX2 array texture from URL:', error);
-    });
-}
-
-// Load multiple single-image KTX2 slices and build a CompressedArrayTexture
-async function loadKTX2ArrayFromSlices(buffers) {
-    showLoadingSpinner();
-    try {
-        // Helper: extract and validate mipmaps for each texture
-        const extractMipmapsList = (texs) => {
-            const list = texs.map((t, idx) => {
-                let mips = t.mipmaps;
-                if (!Array.isArray(mips) || mips.length === 0) {
-                    const iw = t.image?.width;
-                    const ih = t.image?.height;
-                    const idata = t.image?.data;
-                    if (idata && typeof iw === 'number' && typeof ih === 'number') {
-                        mips = [{ data: idata, width: iw, height: ih }];
-                    } else {
-                        throw new Error(`Slice ${idx}: missing mipmap data`);
-                    }
-                }
-                for (let m = 0; m < mips.length; m++) {
-                    const level = mips[m];
-                    if (!level || !level.data) throw new Error(`Slice ${idx} mip ${m}: missing data`);
-                    const d = level.data;
-                    const isTypedArray = ArrayBuffer.isView(d);
-                    const isArrayOfTyped = Array.isArray(d) && d.every((x) => ArrayBuffer.isView(x));
-                    if (!isTypedArray && !isArrayOfTyped) throw new Error(`Slice ${idx} mip ${m}: data must be typed array(s)`);
-                    if (!(level.width > 0) || !(level.height > 0)) throw new Error(`Slice ${idx} mip ${m}: invalid dimensions ${level.width}x${level.height}`);
-                }
-                return mips;
-            });
-            return list;
-        };
-        // Helper: block sizes for a few common compressed formats
-        const getBlockInfo = (fmt) => {
-            const T = THREE;
-            if (fmt === T.RGBA_ASTC_4x4_Format) return { bw: 4, bh: 4, bpb: 16 };
-            if (fmt === T.RGBA_BPTC_Format) return { bw: 4, bh: 4, bpb: 16 };
-            if (fmt === T.RGBA_S3TC_DXT1_Format || fmt === T.RGB_S3TC_DXT1_Format) return { bw: 4, bh: 4, bpb: 8 };
-            if (fmt === T.RGBA_S3TC_DXT3_Format || fmt === T.RGBA_S3TC_DXT5_Format) return { bw: 4, bh: 4, bpb: 16 };
-            if (fmt === T.RGB_ETC2_Format) return { bw: 4, bh: 4, bpb: 8 };
-            if (fmt === T.RGBA_ETC2_EAC_Format) return { bw: 4, bh: 4, bpb: 16 };
-            // Fallback unknown
-            return null;
-        };
-
-        // Create blob URLs and load each slice as a compressed texture
-        const urls = buffers.map((buf) => URL.createObjectURL(new Blob([buf], { type: 'application/octet-stream' })));
-        let textures = await Promise.all(urls.map((u) => ktx2Loader.loadAsync(u)));
-        // Cleanup URLs
-        urls.forEach((u) => URL.revokeObjectURL(u));
-
-        // Debug: log slice summaries
-        console.log('[KTX2 slices] loaded:', textures.length);
-        textures.forEach((t, i) => {
-            const w = t.image?.width; const h = t.image?.height;
-            const mips = Array.isArray(t.mipmaps) ? t.mipmaps.length : 0;
-            console.log(` slice[${i}] format=${t.format} base=${w}x${h} mips=${mips}`);
-        });
-
-        // For each texture, get its mipmaps array; ensure at least base level present
-        let mipmapsList = extractMipmapsList(textures);
-
-        // Sanity check: format, dimensions, mip count must match across slices
-        let f = textures[0].format;
-        console.log('[KTX2 slices] GPU-format (first slice):', formatToString(f), `(${f})`);
-        // Heuristic: On Android devices, ASTC array uploads can be flaky on some drivers.
-        // If ASTC was chosen, try reloading slices with ASTC disabled to prefer ETC2.
-        // Note: Android is configured to prefer ETC2 at loader init; no re-transcode here.
-        const baseW = mipmapsList[0][0].width;
-        const baseH = mipmapsList[0][0].height;
-        const mipsCount = mipmapsList[0].length;
-        for (let i = 0; i < textures.length; i++) {
-            const t = textures[i];
-            const mips = mipmapsList[i];
-            if (t.format !== f) throw new Error(`Slice ${i}: format mismatch`);
-            if (mips.length !== mipsCount) throw new Error(`Slice ${i}: mip count mismatch (${mips.length} vs ${mipsCount})`);
-            if (mips[0].width !== baseW || mips[0].height !== baseH) throw new Error(`Slice ${i}: base dimensions mismatch`);
-        }
-
-        // Transform to mip-major structure: for each mip level, provide data array of length=depth
-        const depth = mipmapsList.length;
-        const mipmapsByLevel = [];
-        for (let level = 0; level < mipsCount; level++) {
-            const levelWidth = mipmapsList[0][level].width;
-            const levelHeight = mipmapsList[0][level].height;
-            const levelData = [];
-            for (let layer = 0; layer < depth; layer++) {
-                const entry = mipmapsList[layer][level];
-                // Ensure each entry is a typed array (single layer payload)
-                if (Array.isArray(entry.data)) {
-                    // If a loader provided array-of-layers per slice (unlikely), take this layer index
-                    const maybeTyped = entry.data[layer];
-                    if (!ArrayBuffer.isView(maybeTyped)) {
-                        throw new Error(`Layer ${layer} mip ${level}: expected typed array, got ${typeof maybeTyped}`);
-                    }
-                    levelData.push(maybeTyped);
-                } else {
-                    if (!ArrayBuffer.isView(entry.data)) {
-                        throw new Error(`Layer ${layer} mip ${level}: data is not typed array`);
-                    }
-                    levelData.push(entry.data);
-                }
-            }
-            if (levelData.length !== depth) {
-                throw new Error(`Mip ${level}: data array length ${levelData.length} != depth ${depth}`);
-            }
-            // Flatten per-layer typed arrays into a single contiguous typed array as expected by three.js
-            const ctor = levelData[0].constructor; // assume all layers share the same constructor
-            if (!levelData.every(d => d.constructor === ctor)) {
-                console.warn('[KTX2 array build] Mixed typed array constructors across layers at mip', level, levelData.map(d => d.constructor && d.constructor.name));
-            }
-            const totalBytes = levelData.reduce((sum, d) => sum + d.byteLength, 0);
-            // Use Uint8Array as a safe fallback for compressed payloads since bytes are copied verbatim
-            const flat = new Uint8Array(totalBytes);
-            let offset = 0;
-            for (let i = 0; i < levelData.length; i++) {
-                const part = levelData[i];
-                flat.set(new Uint8Array(part.buffer, part.byteOffset, part.byteLength), offset);
-                offset += part.byteLength;
-            }
-            // Debug per-level summary, include expected bytes if known
-            const blk = getBlockInfo(f);
-            let expectedBytes = null;
-            if (blk) {
-                const bw = Math.ceil(levelWidth / blk.bw);
-                const bh = Math.ceil(levelHeight / blk.bh);
-                expectedBytes = bw * bh * blk.bpb * depth;
-            }
-            console.log(`[KTX2 array build] mip ${level}: ${levelWidth}x${levelHeight}, layers=${levelData.length}, flatBytes=${flat.byteLength}` + (expectedBytes !== null ? ` (expected≈${expectedBytes})` : ''));
-            mipmapsByLevel.push({ data: flat, width: levelWidth, height: levelHeight });
-        }
-
-        // If ETC2 format was selected, double-check whether data matches RGB (8bpb) or RGBA (16bpb)
-        // and correct the format accordingly to avoid GPU interpreting with the wrong internalformat.
-        if (f === THREE.RGB_ETC2_Format || f === THREE.RGBA_ETC2_EAC_Format) {
-            const lvl0 = mipmapsByLevel[0];
-            const blocksW = Math.ceil(lvl0.width / 4);
-            const blocksH = Math.ceil(lvl0.height / 4);
-            const totalBlocks = blocksW * blocksH;
-            const perLayerBytes = lvl0.data.byteLength / mipmapsList.length; // depth
-            const isRGB = perLayerBytes === totalBlocks * 8;
-            const isRGBA = perLayerBytes === totalBlocks * 16;
-            if (isRGB && f !== THREE.RGB_ETC2_Format) {
-                console.warn('[KTX2 array build] Correcting format to ETC2 RGB based on byte size.');
-                f = THREE.RGB_ETC2_Format;
-            } else if (isRGBA && f !== THREE.RGBA_ETC2_EAC_Format) {
-                console.warn('[KTX2 array build] Correcting format to ETC2 RGBA based on byte size.');
-                f = THREE.RGBA_ETC2_EAC_Format;
-            } else if (!isRGB && !isRGBA) {
-                console.warn('[KTX2 array build] ETC2 byte size does not match RGB or RGBA expectations. Proceeding with', formatToString(f));
-            }
-        }
-
-        // Construct CompressedArrayTexture with mip-major mipmaps
-        const texArray = new THREE.CompressedArrayTexture(mipmapsByLevel, baseW, baseH, depth, f);
-        texArray.needsUpdate = true;
-        texArray.flipY = false;
-        texArray.generateMipmaps = false;
-        texArray.minFilter = mipsCount > 1 ? THREE.LinearMipmapLinearFilter : THREE.LinearFilter;
-        texArray.magFilter = THREE.LinearFilter;
-        texArray.wrapS = THREE.ClampToEdgeWrapping;
-        texArray.wrapT = THREE.ClampToEdgeWrapping;
-        // Mild anisotropy for better quality when minifying; 
-        // avoid on Android to reduce driver variability
-        try {
-            if (!isAndroid()) {
-                texArray.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
-            }
-        } catch { }
-        // Try to propagate color space from the first slice (e.g., SRGBColorSpace)
-        if (textures[0].colorSpace) {
-            texArray.colorSpace = textures[0].colorSpace;
-        }
-
-        // Additional debug of the final texture object
-        console.log('[KTX2 array build] final tex image:', texArray.image, 'format=', texArray.format, 'mips=', texArray.mipmaps.length);
-        if (texArray.mipmaps[0] && Array.isArray(texArray.mipmaps[0].data)) {
-            console.log('[KTX2 array build] mip0 layer types:', texArray.mipmaps[0].data.map(d => d && d.constructor && d.constructor.name));
-        }
-
-        // Free intermediate per-slice textures to save GPU memory
-        try { textures.forEach(t => t && t.dispose && t.dispose()); } catch { }
-
-        arrayMaterial = makeArrayMaterial(texArray, depth);
-        cube.material = arrayMaterial;
-        cube.material.needsUpdate = true;
-    } catch (err) {
-        console.error('Failed to build CompressedArrayTexture from slices:', err);
-    } finally {
-        hideLoadingSpinner();
-    }
 }
 
 // Update layer once per second when arrayMaterial is active

@@ -26,8 +26,16 @@ function hideLoadingSpinner() {
     }
 }
 
+function updateLoadingText(text) {
+    const loadingText = document.querySelector('.loading-text');
+    if (loadingText) {
+        loadingText.textContent = text;
+    }
+}
+
 
 export {
     showLoadingSpinner,
     hideLoadingSpinner,
+    updateLoadingText,
 };
