@@ -1,0 +1,6 @@
+# Basis Encoder WASM
+The Basis Encoder is used to convert images (e.g. JPG, PNG) into compressed KTX2 textures. The WASM builds here (i.e. `basis_encoder.wasm` and `basis_encoder_threads.wasm`) were made by [Laurent Thillet](https://github.com/lo-th/) and are available here: [https://github.com/lo-th/uil/tree/main/examples/libs](https://github.com/lo-th/uil/tree/main/examples/libs). As of September 2025, BinomialLLC only publishes the [non-threaded build](https://github.com/BinomialLLC/basis_universal/tree/master/webgl/encoder/build). I will try to make my own optimized multithreaded build in the future. 
+
+# Basis Transcoder WASM 
+The transcoder (`basis_transcoder.wasm`) is used by ThreeJS to decode/transcribe existing Basis Universal textures to a supported GPU format. It has been sourced from [https://github.com/mrdoob/three.js/tree/dev/examples/jsm/libs/basis](https://github.com/mrdoob/three.js/tree/dev/examples/jsm/libs/basis). One may alternately load it from a CDN, e.g. 
+[https://app.unpkg.com/three@0.180.0/files/examples/jsm/libs/basis](https://app.unpkg.com/three@0.180.0/files/examples/jsm/libs/basis)

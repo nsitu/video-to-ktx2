@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <link
+        rel="icon"
+        type="image/svg+xml"
+        href="./assets/play.svg"
+    />
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    />
+    <title>Video to KTX2</title>
+
+    <!-- Cross-Origin Isolation Service Worker -->
+    <script src="./coi-serviceworker.js"></script>
+
+
+    <script>
+        // If eruda query parameter is present, 
+        // load eruda for debugging
+        const urlParams = new URLSearchParams(window.location.search);
+        if (urlParams.has('eruda')) {
+            const script = document.createElement('script');
+            script.src = 'https://cdn.jsdelivr.net/npm/eruda';
+            document.head.appendChild(script);
+            script.onload = () => eruda.init();
+        }
+    </script>
+
+</head>
+
+<body>
+
+    <!-- UI Controls -->
+    <div class="ui-panel">
+        <h2
+            class="ui-title"
+            id="titleText"
+        >KTX2 Array Demo</h2>
+    </div>
+
+    <!-- Loading spinner -->
+    <div
+        id="loadingSpinner"
+        class="loading-spinner"
+        style="display: none;"
+    >
+        <img
+            src="./assets/loading-md.gif"
+            alt="Loading..."
+            class="spinner-image"
+        >
+        <p class="loading-text">Please wait...</p>
+    </div>
+
+    <div id="app"> </div>
+
+    <script
+        type="module"
+        src="/src/main.js"
+    ></script>
+</body>
+
+</html>
